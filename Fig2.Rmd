@@ -1,0 +1,1148 @@
+---
+title: "5cohorts"
+author: "Jie Sun"
+date: "9/9/2022"
+output: html_document
+---
+
+# Library dependencies
+```{r, message=FALSE}
+#BiocManager::install(c("Biobase","sva","bladderbatch","snpStats"))
+library(devtools)
+library(Biobase)
+library(sva)
+library(bladderbatch)
+library(snpStats)
+library(tidyverse)
+```
+
+# Read in our data
+```{r, message=FALSE}
+library("readxl")
+meta <- read_excel("/ix/hpark/Jie/MB/Figure_update/Intestinal_data_MOESM3_ESM.xlsx", sheet = "Metadata")
+lkt <- read_excel("/ix/hpark/Jie/MB/Figure_update/Intestinal_data_MOESM3_ESM.xlsx", sheet = "LKT_PPM")
+# make first column to row name for lkt
+library(tidyverse)
+lkt <- lkt %>% remove_rownames %>% column_to_rownames(var="row.names")
+meta2 <- meta[order(match(meta$Sample,colnames(lkt))),] # order metadata as the order of lkt data
+meta2$batch <- NA
+```
+
+# log2 and quantile transformation
+```{r}
+data_log <- log2(lkt+1)           # Log transformation
+library(preprocessCore)
+m <- data.matrix(data_log,rownames.force=nrow(data_log))
+data_lm <- normalize.quantiles(m)
+data_lm <- as.data.frame(data_lm)
+colnames(data_lm) <- colnames(data_log)
+rownames(data_lm) <- rownames(data_log)
+```
+
+# batch correction
+```{r, message=FALSE}
+for (i in 1:186) {
+  if (meta2$Study[i] == "Pittsburgh"){
+    meta2$batch[i] <- 1
+  } else if (meta2$Study[i] == "Chicago") {
+    meta2$batch[i] <- 2
+  } else if (meta2$Study[i] == "Houston") {
+    meta2$batch[i] <- 3
+  } else if (meta2$Study[i] == "Dallas") {
+    meta2$batch[i] <- 4
+  } else if (meta2$Study[i] == "New_York") {
+    meta2$batch[i] <- 5
+  }
+} 
+combat_lkt <- ComBat(dat=data_lm, batch=meta2$batch, mod=NULL, par.prior=TRUE, prior.plots=FALSE)
+```
+
+# separate data to 5 groups 
+```{r}
+pheno <- subset(meta2, select = c("Sample", "Study_Clin_Response", "Study")) # select interested metadata
+# transpose count data
+t_lkt <- t(combat_lkt)
+# as numeric
+t_lkt <- as.data.frame(t_lkt)
+t_lkt[] <- lapply(t_lkt, function(x) {
+      as.numeric(as.character(x)) 
+})
+# merge with metadata
+all <- cbind(t_lkt, pheno)
+table(all$Sample == row.names(all)) # check merge is correctly done
+# split study
+all$Response <- ifelse(all$Study_Clin_Response == "Responder", 1, 0)
+Pit <- all[which(all$Study=='Pittsburgh'), ]
+Hou <- all[which(all$Study=='Houston'), ]
+NYC <- all[which(all$Study=='New_York'), ]
+Dal <- all[which(all$Study=='Dallas'), ]
+Chi <- all[which(all$Study=='Chicago'), ]
+
+# save "expression" value and response for DeepGeni
+write.csv(t(t_lkt), file = "/ix/hpark/Jie/MB/OTU_all_17169.csv", row.names = TRUE)
+write.csv(pheno, file = "/ix/hpark/Jie/MB/class_labels_17169.csv", row.names = TRUE)
+```
+
+# separate data to pitt and non-Pit cohorts
+```{r}
+non_Pit <- all[which(all$Study!='Pittsburgh'), ]
+```
+
+# Draw UMAP to see the effect of batch correction
+```{r}
+set.seed(1130)
+library(umap)
+#pdf(file = "/ix/hpark/Jie/MB/Figure_update/SFig1.pdf")
+# After batch correction
+umap_fit <-  all %>%
+  select(where(is.numeric)) %>%
+  scale() %>%
+  umap()
+umap_df <- umap_fit$layout %>%
+  as.data.frame() %>%
+  rename(UMAP1="V1", UMAP2="V2") 
+umap_df$Sample=rownames(umap_df) 
+umap_df <- umap_df %>% inner_join(pheno, by="Sample")
+umap_df$Pit <- ifelse(umap_df$Study == "Pittsburgh","Yes","No")
+umap_df$Hou <- ifelse(umap_df$Study == "Houston","Yes","No")
+umap_df$Dal <- ifelse(umap_df$Study == "Dallas","Yes","No")
+umap_df$Chi <- ifelse(umap_df$Study == "Chicago","Yes","No")
+umap_df$NYC <- ifelse(umap_df$Study == "New_York","Yes","No")
+group.colors <- c(Yes = "red", No = "grey")
+umap_df %>% ggplot(aes(x=UMAP1, y=UMAP2, color=Study, shape = Study_Clin_Response)) +
+  geom_point() + ggtitle("After Batch Correction") + theme_classic()
+
+############################################################################################
+# Before batch correction
+t_lkt <- t(lkt)
+# as numeric
+t_lkt <- as.data.frame(t_lkt)
+t_lkt[] <- lapply(t_lkt, function(x) {
+      as.numeric(as.character(x)) 
+})
+# merge with metadata
+all_b <- cbind(t_lkt, pheno)
+umap_fit <-  all_b %>%
+  select(where(is.numeric)) %>%
+  scale() %>%
+  umap()
+umap_df <- umap_fit$layout %>%
+  as.data.frame() %>%
+  rename(UMAP1="V1", UMAP2="V2") 
+umap_df$Sample=rownames(umap_df) 
+umap_df <- umap_df %>% inner_join(pheno, by="Sample")
+umap_df$Pit <- ifelse(umap_df$Study == "Pittsburgh","Yes","No")
+umap_df$Hou <- ifelse(umap_df$Study == "Houston","Yes","No")
+umap_df$Dal <- ifelse(umap_df$Study == "Dallas","Yes","No")
+umap_df$Chi <- ifelse(umap_df$Study == "Chicago","Yes","No")
+umap_df$NYC <- ifelse(umap_df$Study == "New_York","Yes","No")
+group.colors <- c(Yes = "red", No = "light blue")
+#umap_df %>% ggplot(aes(x=UMAP1, y=UMAP2, color=NYC, shape = Study_Clin_Response)) +
+#  geom_point() + scale_color_manual(values = group.colors)
+umap_df %>% ggplot(aes(x=UMAP1, y=UMAP2, color=Study, shape = Study_Clin_Response)) +
+  geom_point() + ggtitle("Before Batch Correction") + theme_classic()
+#dev.off()
+```
+
+
+```{r}
+# UMAP for 5 cohorts after batch correction - Need to use umap_df from after batch correction section
+#pdf(file = "/ix/hpark/Jie/MB/Figure_update/FigS1_5cohorts.pdf")
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2, color=Pit, shape = Study_Clin_Response)) +
+  geom_point() + scale_color_manual(values = group.colors)
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2, color=Hou, shape = Study_Clin_Response)) +
+  geom_point() + scale_color_manual(values = group.colors)
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2, color=Dal, shape = Study_Clin_Response)) +
+  geom_point() + scale_color_manual(values = group.colors)
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2, color=Chi, shape = Study_Clin_Response)) +
+  geom_point() + scale_color_manual(values = group.colors)
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2, color=NYC, shape = Study_Clin_Response)) +
+  geom_point() + scale_color_manual(values = group.colors)
+#dev.off()
+```
+
+
+
+# PCA plot for 5 cohort after batch correction
+```{r}
+library(ggfortify)
+pca_res <- prcomp(all[,1:369], scale=TRUE)
+group.colors <- c(Yes = "red", No = "grey")
+autoplot(pca_res, data=umap_df, colour = 'NYC') + scale_color_manual(values = group.colors)
+```
+
+# PCA plot for 5 cohort before batch correction
+```{r}
+library(FactoMineR)
+library(factoextra)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(MASS)
+library(reshape2)
+library(cowplot)
+all_b$Study <- as.factor(all_b$Study)
+# run the pca
+pca1 <- PCA(all_b[ ,c(1:369)], quali.sup = c(8:10), graph = FALSE)
+plot.PCA(pca1)
+# extract pc scores for first two component and add to dat dataframe
+all_b$pc1 <- pca1$ind$coord[, 1] # indexing the first column
+all_b$pc2 <- pca1$ind$coord[, 2]  # indexing the second column
+# extract the data for the variable contributions to each of the pc axes
+pca.vars <- pca1$var$coord %>% data.frame
+pca.vars$vars <- rownames(pca.vars)
+pca.vars.m <- melt(pca.vars, id.vars = "vars")
+# By convention, the variable contribution plot has a circle around the variables that has a radius of 1. Here’s some code to make one.
+circleFun <- function(center = c(0,0),diameter = 1, npoints = 100){
+  r = diameter / 2
+  tt <- seq(0,2*pi,length.out = npoints)
+  xx <- center[1] + r * cos(tt)
+  yy <- center[2] + r * sin(tt)
+  return(data.frame(x = xx, y = yy))
+}
+circ <- circleFun(c(0,0),2,npoints = 500)
+# plot
+p <- ggplot(data = all_b, aes(x = pc1, y = pc2, color = Study, shape = Study_Clin_Response, group = Study)) +
+      geom_hline(yintercept = 0, lty = 2) +
+      geom_vline(xintercept = 0, lty = 2) +
+      geom_point(alpha = 0.8) 
+p1 <- p + stat_ellipse(geom="polygon", aes(fill = Study), alpha = 0.2, show.legend = FALSE, level = 0.95) +
+     xlab("PC 1 (6.40%)") + 
+     ylab("PC 2 (4.71%)") +
+     theme_minimal() +
+     theme(panel.grid = element_blank(), 
+           panel.border = element_rect(fill= "transparent"))
+p1
+```
+
+
+# Univariate regression of 5 cohorts and non-Pit cohort
+```{r warning=FALSE, message=FALSE}
+library(MASS)
+library(tidyr)
+names <- colnames(all)
+#Pit
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ Pit[,i], data = Pit, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_all_Pit <- result_uni
+result_uni_sig_Pit <- result_uni[which(result_uni$P < 0.05), ]
+# non-Pit
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ non_Pit[,i], data = non_Pit, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_all_nP <- result_uni
+result_uni_sig_nP <- result_uni[which(result_uni$P < 0.05), ]
+#############################################################################
+# scatter plot of coefficient of significant taxa in Pitt and non-Pitt cohort
+nP <- result_uni_all_nP[, c('Estimate', 'P', 'taxa')]
+P <- result_uni_all_Pit[, c('Estimate', 'P', 'taxa')]
+names(nP) <- c("coef_nonP", "p_nonP", "taxa")
+names(P) <- c("coef_Pitt", "p_Pitt", "taxa")
+all_uni <- merge(P, nP, by = "taxa")
+# impute missing value (missing coef = 0, missing p-value = 1)
+#for(i in 1:nrow(all)) {
+#  if (is.na(all[i,]$coef_Pitt) && all[i,]$coef_nonP !=0) {
+#    all[i,]$coef_Pitt <- 0
+#  } else if (is.na(all[i,]$coef_nonP) && all[i,]$coef_Pitt !=0) {
+#    all[i,]$coef_nonP <- 0
+#  } else if (is.na(all[i,]$p_Pitt) && all[i,]$p_nonP !=0) {
+#    all[i,]$p_Pitt <- 1
+#  } else if (is.na(all[i,]$p_nonP) && all[i,]$p_Pitt !=0) {
+#    all[i,]$p_nonP <- 1
+#  }
+#}
+# color the shared taxa in pitt and non-pit
+sig7 <- intersect(result_uni_sig_nP$taxa,result_uni_sig_Pit$taxa)
+for (i in 1:369){
+  all_uni$shared_color[i] <- ifelse(all_uni$taxa[i] %in% sig7, "red", "black")
+}
+for (i in 1:369){
+  all_uni$shared[i] <- ifelse(all_uni$taxa[i] %in% sig7, "Yes", "No")
+}
+
+# scatter plots of coefficient and p-value
+plot(all_uni$coef_Pitt, all_uni$coef_nonP, col = "blue", main = "Coefficient of sig taxa from Pitt vs non-Pitt cohort", xlab ="Pitt", ylab = "Non-Pitt")
+abline(lm(all_uni$coef_nonP ~ all_uni$coef_Pitt))
+summary(lm(all_uni$coef_nonP ~ all_uni$coef_Pitt))
+#######################################################
+#pdf(file = "/ix/hpark/Jie/MB/Fig2b.pdf")
+plot(-log10(all_uni$p_Pitt), -log10(all_uni$p_nonP), col = all_uni$shared_color, main = "-log10 P-value of sig taxa from Pitt vs non-Pitt cohort", xlab ="Pitt", ylab = "Non-Pitt")
+#plot(-log10(all_uni$p_Pitt), -log10(all_uni$p_nonP), col = "blue", main = "-log10 P-value of sig taxa from Pitt vs non-Pitt cohort", xlab ="Pitt", ylab = "Non-Pitt")
+abline(v = -log10(0.05), col="red", lwd=2, lty=2)
+abline(h = -log10(0.05), col="red", lwd=2, lty=2)
+abline(lm(all_uni$p_nonP ~ all_uni$p_Pitt), col="blue")
+summary(lm(all_uni$p_nonP ~ all_uni$p_Pitt))
+
+###################
+#pdf(file = "/ix/hpark/Jie/MB/Figure_update/Fig2B.pdf")
+ggplot(all_uni, aes(x = -log10(p_Pitt), y = -log10(p_nonP), color = shared)) +
+  geom_point() +  # Scatter plot
+  geom_smooth(method = "lm", color = "blue", se = FALSE, size = 0.7) +
+  geom_vline(xintercept = -log10(0.05), color = "red", linetype = "dashed", size = 0.7) +  # Vertical line at p=0.05
+  geom_hline(yintercept = -log10(0.05), color = "red", linetype = "dashed", size = 0.7) +  # Horizontal line at p=0.05
+  labs(title = "Significance of association b/w bacteria and response (-log10(P-value))", 
+       x = "Pitt", 
+       y = "Non-Pitt") +
+  theme_classic() +  # Clean theme
+  scale_color_manual(values = c("No" = "grey", "Yes" = "red"))  # Customize colors for `shared`
+#dev.off()
+#########################################################
+# use cutoff = 1 for the scatter plot of -log10 p-value
+log10p <- all_uni[-log10(all_uni$p_Pitt) >1  & -log10(all_uni$p_nonP) > 1, ]
+plot(-log10(log10p$p_Pitt), -log10(log10p$p_nonP), col = "blue", main = "-log10 P-value of sig taxa from Pitt vs non-Pitt cohort", xlab ="Pitt", ylab = "Non-Pitt")
+abline(lm(log10p$p_nonP ~ log10p$p_Pitt))
+summary(lm(log10p$p_nonP ~ log10p$p_Pitt))
+
+# Venn diagram 
+#install.packages("VennDiagram")               
+library("VennDiagram") 
+# move to new plotting page
+grid.newpage()
+draw.pairwise.venn(area1=89, area2=21,cross.area=7,
+                   category=c("Pitt","Non-Pitt"),fill=c("Blue","Red"))
+# hypergeometric test
+group1 = 89
+group2 = 21
+Overlap = 7
+Total = 369
+# Test for over-representation (enrichment)
+# When we set parameter lower.tail=FALSE in phyper the interpretation of the p-value is P[X > x] . # But what we need to test is the null hypothesis P[X ≥ x], so we subtract x by 1. 
+# When p-value <= 0.05, we can reject the null hypothesis and assume a significant enrichment, that is, there is a # small probablity of seing an equal or bigger overlap than x.
+phyper(Overlap-1, group2, Total-group2, group1,lower.tail= FALSE)
+```
+# make a logistic regression model for the sig7 taxa and all pairwise interactions
+# calculate AUC using Pitt cohort as training group and non-Pitt as test group: 0.58
+```{r}
+set.seed(1130)
+# Create pairwise interactions for the Pitt cohort
+for(i in 1:(length(sig7)-1)) {
+  for(j in (i+1):length(sig7)) {
+    interaction_term <- paste(sig7[i], sig7[j], sep = ":")
+    Pit[[interaction_term]] <- Pit[[sig7[i]]] * Pit[[sig7[j]]]
+    non_Pit[[interaction_term]] <- non_Pit[[sig7[i]]] * non_Pit[[sig7[j]]]
+  }
+}
+
+# Define the logistic regression formula with all taxa and interactions
+taxa_interactions <- colnames(Pit)[grepl(":", colnames(Pit))]
+formula <- as.formula(paste("Response ~", paste(c(sig7, taxa_interactions), collapse = " + ")))
+
+# Fit the logistic regression model on Pitt cohort
+logistic_model <- glm(formula, data = Pit, family = binomial)
+
+# Make predictions (probabilities) on the non-Pitt cohort
+non_Pit$predicted_prob <- predict(logistic_model, newdata = non_Pit, type = "response")
+
+# Load pROC package
+library(pROC)
+
+# Calculate the AUC
+roc_curve <- roc(non_Pit$Response, non_Pit$predicted_prob)
+auc_value <- auc(roc_curve)
+
+# Print AUC
+print(auc_value)
+
+```
+
+
+```{r warning=FALSE, message=FALSE}
+##############################################################################
+#Hou
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ Hou[,i], data = Hou, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_pre <- result_uni
+result_uni_pre_sig_Hou <- result_uni[which(result_uni$P < 0.05), ] 
+# NYC
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ NYC[,i], data = NYC, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_pre <- result_uni
+result_uni_pre_sig_NYC <- result_uni[which(result_uni$P < 0.05), ] 
+# Dal
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ Dal[,i], data = Dal, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_pre <- result_uni
+result_uni_pre_sig_Dal <- result_uni[which(result_uni$P < 0.05), ] 
+# Chi
+result_uni <- data.frame(matrix(ncol = 5, nrow = 0))
+for (i in 1:369){
+tax <- names[i] # Analyse specific taxa
+res <- glm(Response ~ Chi[,i], data = Chi, family="binomial") # logistic regression
+# write down p-value and coefficient
+p <- as.data.frame(coef(summary(res)))
+p <- p[2,]
+p$taxa <- names[i]
+result_uni <- rbind(result_uni, p)
+}
+colnames(result_uni)[4] <- "P"
+result_uni_pre <- result_uni
+result_uni_pre_sig_Chi <- result_uni[which(result_uni$P < 0.05), ] 
+```
+
+# Upset plot for univariate results
+```{r}
+# Specific library
+library(UpSetR)
+# Dataset
+input <- c(
+  Chi = 17,
+  Dal = 2,
+  Hou = 17,
+  NYC = 2,
+  Pit = 89, 
+  "Chi&Dal" = length(intersect(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa)),
+  "Chi&Hou" = length(intersect(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Hou$taxa)),
+  "Chi&NYC" = length(intersect(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_NYC$taxa)),
+  "Chi&Pit" = length(intersect(result_uni_pre_sig_Chi$taxa, result_uni_sig_Pit$taxa)),
+  "Dal&Hou" = length(intersect(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa)),
+  "Dal&NYC" = length(intersect(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_NYC$taxa)),
+  "Dal&Pit" = length(intersect(result_uni_pre_sig_Dal$taxa, result_uni_sig_Pit$taxa)),
+  "Hou&NYC" = length(intersect(result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa)),
+  "Hou&Pit" = length(intersect(result_uni_pre_sig_Hou$taxa, result_uni_sig_Pit$taxa)),
+  "NYC&Pit" = length(intersect(result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa)),
+  "Chi&Dal&Hou" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa))),
+  "Chi&Dal&NYC" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_NYC$taxa))),
+  "Chi&Dal&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa, result_uni_sig_Pit$taxa))),
+  "Chi&Hou&NYC" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa))),
+  "Chi&Hou&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Hou$taxa, result_uni_sig_Pit$taxa))),
+  "Chi&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa))),
+  "Dal&Hou&NYC" = length(Reduce(intersect, list(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa))),
+  "Dal&Hou&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa, result_uni_sig_Pit$taxa))),
+  "Dal&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa))),
+  "Hou&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa))),
+  "Chi&Dal&Hou&NYC" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa))),
+  "Chi&Hou&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa))) ,
+  "Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa))),
+  "Chi&Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(result_uni_pre_sig_Chi$taxa, result_uni_pre_sig_Dal$taxa, result_uni_pre_sig_Hou$taxa, result_uni_pre_sig_NYC$taxa, result_uni_sig_Pit$taxa)))
+)
+# Plot
+#######################################################
+pdf(file = "/ix/hpark/Jie/MB/Fig2A.pdf")
+upset(fromExpression(input), 
+      nintersects = 24, 
+      nsets = 5, 
+      keep.order = T,
+      sets = c("Pit", "NYC","Hou", "Dal", "Chi"),
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1
+      )
+dev.off()
+#######################################################
+```
+
+# Add interaction with elastic net
+```{r}
+library(glmnet)
+library(caret)
+set.seed("1130")
+# Chi
+data <- subset(Chi, select=c(result_uni_pre_sig_Chi$taxa))
+y <- Chi$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_Chi <- results_ei %>% filter(s1 > 0)
+
+# Dal
+data <- subset(Dal, select=c(result_uni_pre_sig_Dal$taxa))
+y <- Dal$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_Dal <- results_ei %>% filter(s1 > 0)
+
+# Hou
+data <- subset(Hou, select=c(result_uni_pre_sig_Hou$taxa))
+y <- Hou$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_Hou <- results_ei %>% filter(s1 > 0)
+
+# NYC
+data <- subset(NYC, select=c(result_uni_pre_sig_NYC$taxa))
+y <- NYC$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_NYC <- results_ei %>% filter(s1 > 0)
+```
+
+# #########################################################################################
+# Use 7 common sig taxa from univariate
+```{r}
+# Pit
+data <- subset(Pit, select=sig7)
+y <- as.factor(Pit$Response)
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  #y~.^7, data = data_new, method = "glmnet",
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei7_Pit_orig <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei7_Pit <- results_ei7_Pit_orig %>% filter(s1 > 0)
+
+# Non-Pit
+data <- subset(non_Pit, select=sig7)
+y <- non_Pit$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  #y~.^7, data = data_new, method = "glmnet",
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei7_non_Pit_orig <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei7_non_Pit <- results_ei7_non_Pit_orig %>% filter(s1 > 0)
+```
+
+# make a elastic model for the sig7 taxa and all pairwise interactions
+# calculate AUC using Pitt cohort as training group and non-Pitt as test group: 
+```{r}
+# Using interaction terms built from the logistic regression AUC steps
+# Combine original taxa and interaction terms for feature set
+features <- c(sig7, taxa_interactions)
+
+# Convert features and response to matrix form
+x_train <- as.matrix(Pit[, features])
+y_train <- as.factor(Pit$Response)  # Make sure the response is a factor for classification
+
+x_test <- as.matrix(non_Pit[, features])
+y_test <- as.factor(non_Pit$Response)
+
+# Fit Elastic Net model using cross-validation to find the optimal lambda
+library(glmnet)
+cv_fit <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 0.5)  # alpha = 0.5 means Elastic Net
+
+# Predict probabilities on the non-Pitt cohort using the best lambda
+predicted_prob <- predict(cv_fit, newx = x_test, s = "lambda.min", type = "response")
+
+# Calculate the AUC using the true response and predicted probabilities
+roc_curve <- roc(y_test, as.vector(predicted_prob))
+auc_value <- auc(roc_curve)
+
+# Print AUC
+print(auc_value)
+
+```
+
+# Calculate overlap and AUC
+```{r}
+set.seed(1130)
+## 1. Fit the Elastic Net Model on Pitt Cohort (Training)
+
+# Fit Elastic Net model on Pitt cohort
+cv_fit_pitt <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 0.5)
+
+# Get the coefficients of the selected features (non-zero coefficients) for Pitt
+coef_pitt <- coef(cv_fit_pitt, s = "lambda.min")
+selected_features_pitt <- rownames(coef_pitt)[coef_pitt[,1] != 0]
+print("Selected features in Pitt cohort:")
+print(selected_features_pitt)
+
+# Predict on non-Pitt cohort using the model trained on Pitt
+predicted_prob_pitt <- predict(cv_fit_pitt, newx = x_test, s = "lambda.min", type = "response")
+
+# Calculate AUC for the non-Pitt cohort
+roc_curve_pitt <- roc(y_test, as.vector(predicted_prob_pitt))
+auc_value_pitt <- auc(roc_curve_pitt)
+print(paste("AUC for Pitt-trained model on non-Pitt cohort:", auc_value_pitt))
+
+## 2. Fit the Elastic Net Model on Non-Pitt Cohort (Testing Cohort)
+# Fit Elastic Net model on Non-Pitt cohort
+cv_fit_non_pitt <- cv.glmnet(x_test, y_test, family = "binomial", alpha = 0.5)
+
+# Get the coefficients of the selected features (non-zero coefficients) for Non-Pitt
+coef_non_pitt <- coef(cv_fit_non_pitt, s = "lambda.min")
+selected_features_non_pitt <- rownames(coef_non_pitt)[coef_non_pitt[,1] != 0]
+print("Selected features in Non-Pitt cohort:")
+print(selected_features_non_pitt)
+
+## 3. Calculate the Overlap of Selected Features
+# Find the overlapping features between Pitt and Non-Pitt cohorts
+overlap_features <- intersect(selected_features_pitt, selected_features_non_pitt)
+print("Overlapping features between Pitt and Non-Pitt cohorts:")
+print(overlap_features)
+
+```
+
+
+# Get taxa that is significant in either P or nP cohort in univariate regression
+```{r}
+taxa_en <- unique(c(result_uni_sig_Pit$taxa, result_uni_sig_nP$taxa))
+# Pit
+data <- subset(Pit, select=taxa_en)
+y <- as.factor(Pit$Response)
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei_Pit_orig <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_Pit <- results_ei_Pit_orig %>% filter(s1 > 0)
+
+# Non-Pit
+data <- subset(non_Pit, select=taxa_en)
+y <- non_Pit$Response
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei_non_Pit_orig <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_non_Pit <- results_ei_non_Pit_orig %>% filter(s1 > 0)
+```
+
+# Try elastic net with all 369 taxa as input
+```{r}
+set.seed("1130")
+# Pitt
+# Non-Pit
+data <- Pit[,1:369]
+y <- as.factor(Pit$Response)
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_Pit_369 <- results_ei %>% filter(s1 > 0)
+# Non-Pit
+data <- non_Pit[,1:369]
+y <- as.factor(non_Pit$Response)
+data_new <- cbind(y, data)
+# Build the model using the training set
+model <- train(
+  y~.*., data = data_new, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+)
+# Best tuning parameter
+model$bestTune
+# Coefficient of the final model. You need to specify the best lambda
+#coef(model$finalModel, model$bestTune$lambda)
+results_ei <- as.data.frame(as.matrix(coef(model$finalModel, model$bestTune$lambda)))
+results_ei_non_Pit_369 <- results_ei %>% filter(s1 > 0)
+######################################################
+intersect(row.names(results_ei_Pit_369), row.names(results_ei_non_Pit_369))
+```
+
+
+# Upset plot for elastic net
+```{r}
+# Dataset
+input <- c(
+  Chi = 10,
+  Dal = 2,
+  Hou = 8,
+  NYC = 3,
+  Pit = 34, 
+  "Chi&Dal" = length(intersect(row.names(results_ei_Chi), row.names(results_ei_Dal))),
+  "Chi&Hou" = length(intersect(row.names(results_ei_Chi), row.names(results_ei_Hou))),
+  "Chi&NYC" = length(intersect(row.names(results_ei_Chi), row.names(results_ei_NYC))),
+  "Chi&Pit" = length(intersect(row.names(results_ei_Chi), row.names(results_ei_Dal))),
+  "Dal&Hou" = length(intersect(row.names(results_ei_Dal), row.names(results_ei_Hou))),
+  "Dal&NYC" = length(intersect(row.names(results_ei_Dal), row.names(results_ei_NYC))),
+  "Dal&Pit" = length(intersect(row.names(results_ei_Dal), row.names(results_ei_Pit))),
+  "Hou&NYC" = length(intersect(row.names(results_ei_Hou), row.names(results_ei_NYC))),
+  "Hou&Pit" = length(intersect(row.names(results_ei_Hou), row.names(results_ei_Pit))),
+  "NYC&Pit" = length(intersect(row.names(results_ei_NYC), row.names(results_ei_Pit))),
+  "Chi&Dal&Hou" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Dal), row.names(results_ei_Hou)))),
+  "Chi&Dal&NYC" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Dal), row.names(results_ei_NYC)))),
+  "Chi&Dal&Pit" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Dal), row.names(results_ei_Pit)))),
+  "Chi&Hou&NYC" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Hou), row.names(results_ei_NYC)))),
+  "Chi&Hou&Pit" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Hou), row.names(results_ei_Pit)))),
+  "Chi&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_NYC), row.names(results_ei_Pit)))),
+  "Dal&Hou&NYC" = length(Reduce(intersect, list(row.names(results_ei_Dal), row.names(results_ei_Hou), row.names(results_ei_NYC)))),
+  "Dal&Hou&Pit" = length(Reduce(intersect, list(row.names(results_ei_Dal), row.names(results_ei_Hou), row.names(results_ei_Pit)))),
+  "Dal&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Dal), row.names(results_ei_NYC), row.names(results_ei_Pit)))),
+  "Hou&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Hou), row.names(results_ei_NYC), row.names(results_ei_Pit)))),
+  "Chi&Dal&Hou&NYC" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Dal), row.names(results_ei_Hou), row.names(results_ei_NYC)))),
+  "Chi&Hou&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Hou), row.names(results_ei_NYC), row.names(results_ei_Pit)))) ,
+  "Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Dal), row.names(results_ei_Hou), row.names(results_ei_NYC), row.names(results_ei_Pit)))),
+  "Chi&Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(row.names(results_ei_Chi), row.names(results_ei_Dal), row.names(results_ei_Hou), row.names(results_ei_NYC), row.names(results_ei_Pit))))
+)
+# Plot
+upset(fromExpression(input), 
+      nintersects = 24, 
+      nsets = 5, 
+      keep.order = T,
+      sets = c("Pit", "NYC","Hou", "Dal", "Chi"),
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1
+      )
+```
+
+# DeepVASE - Prepare files
+```{r}
+# Chi
+chi_x <- Chi[, c(1:369)]
+write.csv(chi_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/chi_X.csv", row.names = FALSE, quote= FALSE)
+chi_y <- Chi$Response
+write.csv(chi_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/chi_Y.csv", row.names = FALSE, quote= FALSE)
+chi_XY <- cbind(chi_x,chi_y)
+write.table(chi_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/chi_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+# Dal
+dal_x <- Dal[, c(1:369)]
+write.csv(dal_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/dal_X.csv", row.names = FALSE, quote= FALSE)
+dal_y <- Dal$Response
+write.csv(dal_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/dal_Y.csv", row.names = FALSE, quote= FALSE)
+dal_XY <- cbind(dal_x,dal_y)
+write.table(dal_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/dal_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+# Hou
+hou_x <- Hou[, c(1:369)]
+write.csv(hou_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/hou_X.csv", row.names = FALSE, quote= FALSE)
+hou_y <- Hou$Response
+write.csv(hou_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/hou_Y.csv", row.names = FALSE, quote= FALSE)
+hou_XY <- cbind(hou_x,hou_y)
+write.table(hou_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/hou_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+# NYC
+nyc_x <- NYC[, c(1:369)]
+write.csv(nyc_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nyc_X.csv", row.names = FALSE, quote= FALSE)
+nyc_y <- NYC$Response
+write.csv(nyc_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nyc_Y.csv", row.names = FALSE, quote= FALSE)
+nyc_XY <- cbind(nyc_x,nyc_y)
+write.table(nyc_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nyc_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+# Pit
+pit_x <- Pit[, c(1:369)]
+write.csv(pit_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/pit_X.csv", row.names = FALSE, quote= FALSE)
+pit_y <- Pit$Response
+write.csv(pit_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/pit_Y.csv", row.names = FALSE, quote= FALSE)
+pit_XY <- cbind(pit_x,pit_y)
+write.table(pit_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/pit_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+```
+
+# divide study to Pitt and non-Pitt
+```{r}
+Chi_x <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/chi_X.csv")
+Dal_x <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/dal_X.csv")
+Hou_x <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/hou_X.csv")
+NYC_x <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nyc_X.csv")
+non_P_x <- bind_rows(Chi_x, Dal_x, Hou_x, NYC_x)
+write.csv(non_P_x,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nonP_x.csv", row.names = FALSE, quote= FALSE)
+Chi_y <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/chi_Y.csv")
+Dal_y <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/dal_Y.csv")
+Hou_y <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/hou_Y.csv")
+NYC_y <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nyc_Y.csv")
+non_P_y <- bind_rows(Chi_y, Dal_y, Hou_y, NYC_y)
+write.csv(non_P_y,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nonP_y.csv", row.names = FALSE, quote= FALSE)
+
+non_P_x <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nonP_x.csv")
+non_P_y <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nonP_y.csv")
+nonP_XY <- cbind(non_P_x,non_P_y)
+write.table(nonP_XY,"/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/nonP_XY.txt", sep="\t", row.names = FALSE, quote= FALSE)
+```
+
+# DeepVASE visualization
+```{r}
+# read in raw data
+Pit_f <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.01/FMTselected_features_pit.csv")
+Chi_f <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.01/FMTselected_features_chi.csv")
+Hou_f <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.01/FMTselected_features_hou.csv")
+Dal_f <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.01/FMTselected_features_dal.csv")
+NYC_f <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.01/FMTselected_features_nyc.csv")
+########################################
+Pit_f5 <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.05/FMTselected_features_pit.csv")
+Chi_f5 <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.05/FMTselected_features_chi.csv")
+Hou_f5 <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.05/FMTselected_features_hou.csv")
+Dal_f5 <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.05/FMTselected_features_dal.csv")
+NYC_f5 <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/Wscores_0.05/FMTselected_features_nyc.csv")
+
+length(Reduce(intersect, list(Chi_f$X0,Chi_f5$X0)))
+```
+
+
+```{r}
+# Upset plot
+# Dataset
+input <- c(
+  Chi =185,
+  Dal = 189,
+  Hou = 199,
+  NYC = 181,
+  Pit = 210, 
+  "Chi&Dal" = length(intersect(Chi_f$X0, Dal_f$X0)),
+  "Chi&Hou" = length(intersect(Chi_f$X0, Hou_f$X0)),
+  "Chi&NYC" = length(intersect(Chi_f$X0, NYC_f$X0)),
+  "Chi&Pit" = length(intersect(Chi_f$X0, Dal_f$X0)),
+  "Dal&Hou" = length(intersect(Dal_f$X0, Hou_f$X0)),
+  "Dal&NYC" = length(intersect(Dal_f$X0, NYC_f$X0)),
+  "Dal&Pit" = length(intersect(Dal_f$X0, Pit_f$X0)),
+  "Hou&NYC" = length(intersect(Hou_f$X0, NYC_f$X0)),
+  "Hou&Pit" = length(intersect(Hou_f$X0, Pit_f$X0)),
+  "NYC&Pit" = length(intersect(NYC_f$X0, Pit_f$X0)),
+  "Chi&Dal&Hou" = length(Reduce(intersect, list(Chi_f$X0, Dal_f$X0, Hou_f$X0))),
+  "Chi&Dal&NYC" = length(Reduce(intersect, list(Chi_f$X0, Dal_f$X0, NYC_f$X0))),
+  "Chi&Dal&Pit" = length(Reduce(intersect, list(Chi_f$X0, Dal_f$X0, Pit_f$X0))),
+  "Chi&Hou&NYC" = length(Reduce(intersect, list(Chi_f$X0, Hou_f$X0, NYC_f$X0))),
+  "Chi&Hou&Pit" = length(Reduce(intersect, list(Chi_f$X0, Hou_f$X0, Pit_f$X0))),
+  "Chi&NYC&Pit" = length(Reduce(intersect, list(Chi_f$X0, NYC_f$X0, Pit_f$X0))),
+  "Dal&Hou&NYC" = length(Reduce(intersect, list(Dal_f$X0, Hou_f$X0, NYC_f$X0))),
+  "Dal&Hou&Pit" = length(Reduce(intersect, list(Dal_f$X0, Hou_f$X0, Pit_f$X0))),
+  "Dal&NYC&Pit" = length(Reduce(intersect, list(Dal_f$X0, NYC_f$X0, Pit_f$X0))),
+  "Hou&NYC&Pit" = length(Reduce(intersect, list(Hou_f$X0, NYC_f$X0, Pit_f$X0))),
+  "Chi&Dal&Hou&NYC" = length(Reduce(intersect, list(Chi_f$X0, Dal_f$X0, Hou_f$X0, NYC_f$X0))),
+  "Chi&Hou&NYC&Pit" = length(Reduce(intersect, list(Chi_f$X0, Hou_f$X0, NYC_f$X0, Pit_f$X0))) ,
+  "Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(Dal_f$X0, Hou_f$X0, NYC_f$X0, Pit_f$X0))),
+  "Chi&Dal&Hou&NYC&Pit" = length(Reduce(intersect, list(Chi_f$X0, Dal_f$X0, Hou_f$X0, NYC_f$X0, Pit_f$X0)))
+)
+# Plot
+upset(fromExpression(input), 
+      nintersects = 29, 
+      nsets = 5, 
+      keep.order = T,
+      sets = c("Pit", "NYC","Hou", "Dal", "Chi"),
+      mb.ratio = c(0.6, 0.4),
+      number.angles = 0, 
+      text.scale = 1.1, 
+      point.size = 2.8, 
+      line.size = 1
+      )
+```
+
+```{r}
+# Heatmap of W scores
+Pit_f$X <- NULL
+names(Pit_f) <- c("taxa", "Pit_w")
+Hou_f$X <- NULL
+names(Hou_f) <- c("taxa", "Hou_w")
+NYC_f$X <- NULL
+names(NYC_f) <- c("taxa", "NYC_w")
+Chi_f$X <- NULL
+names(Chi_f) <- c("taxa", "Chi_w")
+Dal_f$X <- NULL
+names(Dal_f) <- c("taxa", "Dal_w")
+df_w <- Pit_f %>% 
+  full_join(Hou_f, by="taxa") %>%
+  full_join(Dal_f, by="taxa") %>%
+  full_join(NYC_f, by="taxa") %>%
+  full_join(Chi_f, by="taxa")
+library(tibble)
+df_w1 <- df_w %>% remove_rownames %>% column_to_rownames(var="taxa")
+df_w1[is.na(df_w1)] <- 0
+library("pheatmap")
+# normalize by column
+pheatmap(df_w1, scale="column", cluster_cols = FALSE)
+
+#minmax normalization
+library(caret)
+process <- preProcess(as.data.frame(df_w1), method=c("range"))
+norm_scale <- predict(process, as.data.frame(df_w1))
+pheatmap(norm_scale, cluster_cols=F, show_rownames = T)
+```
+
+```{r}
+# Heatmap of DG scores
+Pit_s <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/DGscores_0.01/Pit_score.csv")
+Pit_s$pit <- Pit_s$s1 - Pit_s$s2
+Pit_s <- Pit_s %>% dplyr::select("Feature1", "pit")
+Hou_s <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/DGscores_0.01/Hou_score.csv")
+Hou_s$hou <- Hou_s$s1 - Hou_s$s2
+Hou_s <- Hou_s %>% dplyr::select("Feature1", "hou")
+Dal_s <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/DGscores_0.01/Dal_score.csv")
+Dal_s$dal <- Dal_s$s1 - Dal_s$s2
+Dal_s <- Dal_s %>% dplyr::select("Feature1", "dal")
+Chi_s <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/DGscores_0.01/Chi_score.csv")
+Chi_s$chi <- Chi_s$s1 - Chi_s$s2
+Chi_s <- Chi_s %>% dplyr::select("Feature1", "chi")
+NYC_s <- read.csv(file="/Users/sunjie/Desktop/MB/Stage3_PUBdata/DeepVASE/DGscores_0.01/NYC_score.csv")
+NYC_s$nyc <- NYC_s$s1 - NYC_s$s2
+NYC_s <- NYC_s %>% dplyr::select("Feature1", "nyc")
+df <- Pit_s %>% 
+  full_join(Hou_s, by="Feature1") %>%
+  full_join(Dal_s, by="Feature1") %>%
+  full_join(NYC_s, by="Feature1") %>%
+  full_join(Chi_s, by="Feature1")
+library(tibble)
+df1 <- df %>% remove_rownames %>% column_to_rownames(var="Feature1")
+df1[is.na(df1)] <- 0
+library("pheatmap")
+# normalize by column
+pheatmap(df1, scale="column", cluster_cols = FALSE)
+
+#minmax normalization
+library(caret)
+process <- preProcess(as.data.frame(df1), method=c("range"))
+norm_scale <- predict(process, as.data.frame(df1))
+pheatmap(norm_scale, cluster_cols=F, show_rownames = T)
+```
+# Scatter plot of delta DG scores
+```{r}
+
+```
+
+# Leave-one-out for Pitt and non-Pitt cohort
+```{r}
+# ML LOO on Summarized Experiment
+# J.H Badger (as part of McCulloch, et al. 2021)
+# November 14, 2021
+
+
+# Load needed libraries
+library(tidyverse)
+library(SummarizedExperiment)
+library(futile.logger)
+library(caret)
+library(MLeval)
+```
+
+
+```{r}
+# summarized experiment object to analyze
+
+lkt_p <- Pit
+#lkt_p$Study <- "Pitt"
+lkt_p <- lkt_p[, !(colnames(lkt_p) %in% c("Sample","Response", "Study"))]
+lkt_np <- non_Pit
+#lkt_np$Study <- "nonPitt"
+lkt_np <- lkt_np[, !(colnames(lkt_np) %in% c("Sample","Response", "Study"))]
+lkt <- rbind(lkt_p, lkt_np)
+lkt <- lkt[, !(colnames(lkt) %in% c("Sample","Response"))]
+```
+
+
+```{r}
+runML <- function(exp, response="Study_Clin_Response", 
+                  positive="Responder", method="rf", index=NULL,
+                  Group = "", seed=15, boot=1, metric=max) {
+  set.seed(seed)
+  train_control <- trainControl(method="cv", number=10, 
+                                classProbs=T, savePredictions = T)
+  if (is.null(index)) {
+    index <- createDataPartition(exp[[response]], p=0.70, list=FALSE)
+  }
+  models <- list()
+  accuracies <- c()
+  for(i in 1:boot) {
+    training <- exp[as.vector(index), ]
+    tData <- training
+    tResp <- factor(training[[response]])
+    models[[i]] <- train(tData, tResp, trControl = train_control, 
+                   method = method, preProcess=c("center", "scale"))
+    testing <- exp[-as.vector(index),]
+    obs <- factor(exp[row.names(testing),][[response]])
+    predictions <- factor(predict(models[[i]], testing))
+    matrix <- confusionMatrix(predictions, obs,
+                  positive = positive)
+    accuracies[i] <- matrix$overall["Accuracy"]
+  }
+  accuracies <- round(accuracies, 3)
+  target_acc <- metric(accuracies)
+  model <- models[[which(accuracies==target_acc)[1]]]
+  if (is_null(model)) {
+    flog.error("null model detected")
+    model <- models[[which(!is.null(models))[1]]]
+  }
+  ppred <- data.frame(predict(model, testing, type="prob"))
+  ppred$obs <- obs
+  ppred$Group <- Group
+  roc <- evalm(ppred, silent=TRUE, plots="r", showplots = FALSE)
+  rstats <- roc$optres[[1]]
+  stats <- matrix$overall[1:6]
+  stats <- append(stats, rstats["AUC-ROC","Score"])
+  names(stats)[length(stats)] <- "AUC"
+  list(stats=stats,model=model)
+}
+
+testModel <- function(model, exp, seed=15, response="Study_Clin_Response",  positive="Responder", Group = "") {
+  set.seed(seed)
+  testing <- exp
+  obs <- factor(exp[[response]])
+  predictions <- factor(predict(model, testing))
+  matrix <- confusionMatrix(predictions, obs,
+                    positive = positive)
+  ppred <- data.frame(predict(model, testing, type="prob"))
+  ppred$obs <- obs
+  roc <- evalm(ppred, silent=TRUE, plots="r", showplots = FALSE)
+  rstats <- roc$optres[[1]]
+  stats <- matrix$overall[1:6]
+  stats <- append(stats, rstats["AUC-ROC","Score"])
+  ppred$Group <- str_c(Group, " p = ", signif(stats[["AccuracyPValue"]],3))
+  names(stats)[length(stats)] <- "AUC"
+  list(stats=stats, ppred=ppred)
+}
+
+results <- NULL
+pdf("loo_rocs.pdf")
+#for(study in sort(unique(lkt$Study))) {
+study <-  "Pitt"
+  predictions <- data.frame()
+  for(method in c("rf")) {
+    flog.info(str_c(study," ", method))
+    mdl <- runML(lkt_np, method = method)
+    res <- testModel(mdl$model, lkt_p, Group=method)
+    predictions <- rbind(predictions, res$ppred)
+    line <- append(c(Study=study, Method=method), res$stats)
+    if (is.null(results)) {
+      results <- t(data.frame(line))
+    } else {
+      results <- rbind(results, line)
+    }
+  }
+
+  roc <- evalm(predictions, silent = TRUE, plots="r", showplots = FALSE)$roc + 
+    ggtitle(str_c("LKT ", study, " bootstrapped"))
+  print(roc)
+#}
+dev.off()
+write_tsv(data.frame(results),"results.tsv")
+```
+```{r}
+## load data and run Caret
+data(Sonar)
+ctrl <- trainControl(method="cv", summaryFunction=twoClassSummary, classProbs=T,
+                     savePredictions = T)
+fit1 <- train(Study_Clin_Response ~ .,data=lkt_p,method="rf",trControl=ctrl)
+ctrl <- trainControl(method="cv", summaryFunction=twoClassSummary, classProbs=T,
+                     savePredictions = T)
+fit2 <- train(Class ~ .,data=Sonar,method="gbm",trControl=ctrl)
+ctrl <- trainControl(method="cv", summaryFunction=twoClassSummary, classProbs=T,
+                     savePredictions = T)
+fit3 <- train(Class ~ .,data=Sonar,method="nb",trControl=ctrl)
+
+## run MLeval
+res <- evalm(list(fit1),gnames=c('rf'))
+```
+
+
+# barplot for AUC of DeepGeni
+```{r}
+library(ggplot2)
+
+# Data
+data <- data.frame(
+  Category = c("DeepMicroNET", "DeepGeni-RF", "DeepGeni-SVM", "DeepGeni-NN"),
+  Values = c(0.720, 0.520, 0.518, 0.498)
+)
+
+data$Category <- factor(data$Category, levels = c("DeepMicroNET", "DeepGeni-RF", "DeepGeni-SVM", "DeepGeni-NN"))
+
+# Create the bar graph
+pdf(file = "/ix/hpark/Jie/MB/Figure_update/DeepGeni.pdf")
+
+ggplot(data, aes(x = Category, y = Values)) +
+  geom_bar(stat = "identity", fill = "skyblue", width = 0.5, position = position_dodge(width = 0.1)) +
+  theme_classic() +
+  labs(title = "Comparison of AUROC between DeepMicroNET and DeepGeni", x = "Method", y = "AUROC") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+dev.off()
+```
+
+
