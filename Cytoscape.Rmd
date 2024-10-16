@@ -1,0 +1,262 @@
+---
+title: "Cytoscape"
+output: html_document
+date: "2024-02-23"
+---
+
+# read in data
+```{r, warning=FALSE, message=FALSE}
+library(readr)
+interaction_default_node <- read_csv("MB/interaction_default_node.csv")
+test <- read_csv("MB/test.csv")
+control <- read_csv("MB/control.csv")
+```
+
+# group
+```{r}
+# re-format
+library(dplyr)
+# Remove double quotes from the Description column
+interaction_default_node <- interaction_default_node %>%
+  mutate(taxa = gsub("\"", "", name))
+
+# name by RA, control and other
+#interaction_default_node$group < "NA"
+#for (i in 1:length(interaction_default_node$taxa)){
+#  if (interaction_default_node$taxa[i] %in% test$taxa) {
+#  interaction_default_node$group[i] <- "RA"
+#} else if (interaction_default_node$taxa[i] %in% control$taxa) {
+#  interaction_default_node$group[i] <- "control"
+#} else {
+#  interaction_default_node$group[i] <- "other"
+#}
+#}
+
+# name by RA and other
+interaction_default_node$group <- ifelse(interaction_default_node$taxa %in% test$taxa, "RA","non-RA")
+
+# View the updated dataframe
+table(interaction_default_node$group)
+```
+
+# Power law distribution
+```{r}
+degree <- interaction_default_node$Degree
+degree.freq <- as.data.frame(table(degree))
+degree.freq1 <-  mutate_all(degree.freq, function(x) as.numeric(as.character(x)))
+plot(log(degree.freq1$degree), log(degree.freq1$Freq))
+```
+
+
+
+# draw hist plots
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggpubr)
+library(rstatix)
+library(scales) # for scientific notation
+
+# Degree
+p_degree <- ks.test(x = interaction_default_node$Degree[interaction_default_node$group == "RA"],
+              y = interaction_default_node$Degree[interaction_default_node$group == "non-RA"]
+)$p # K-S test
+p_degree <- scientific(p_degree, digits = 3)
+
+#pdf(file = "/ix/hpark/Jie/MB/Fig4B.pdf")
+df <- interaction_default_node
+# Normalize the data for each group and calculate proportions
+df_normalized <- df %>%
+  group_by(group) %>%
+  mutate(total_count = n()) %>%
+  ungroup()
+# Create a histogram data frame to check proportions
+hist_data <- df_normalized %>%
+  ggplot(aes(x = Degree, fill = as.factor(group))) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20)
+# Plot the histograms
+print(hist_data + labs(x = "Degree", y = "Normalized frequency", fill = "Group") + theme_minimal())
+#  Build the ggplot to access the underlying data
+hist_build <- ggplot_build(hist_data)
+# Extract counts and bins
+hist_counts <- hist_build$data[[1]] %>%
+  group_by(fill) %>%
+  summarise(bin_count = sum(count), .groups = 'drop')
+# Calculate proportions for each group
+hist_counts <- hist_build$data[[1]] %>%
+  group_by(fill) %>%
+  mutate(proportion = count / sum(count)) %>%
+  ungroup()
+# Check that the sums of proportions equal 1 for each group
+proportion_sums <- hist_counts %>%
+  group_by(fill) %>%
+  summarise(proportion_sum = sum(proportion), .groups = 'drop')
+# Print the proportions sums
+print(proportion_sums)
+
+# Plot the histograms
+ggplot(df_normalized, aes(x = Degree, fill = as.factor(group))) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  labs(x = "Degree", y = "Proportion", fill = "Group") +
+  theme_minimal()
+
+ggplot(interaction_default_node, aes(x = Degree, fill = group)) +
+  geom_histogram(aes(y = ..count.. / tapply(..count.., ..PANEL.., sum)[..PANEL..]), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_degree)) +
+  ylab("Normalized Frequency") +
+  theme_minimal()
+#dev.off()
+```
+
+
+```{r}
+# AverageShortestPathLength
+p_path <- ks.test(x = interaction_default_node$AverageShortestPathLength[interaction_default_node$group == "RA"],
+              y = interaction_default_node$AverageShortestPathLength[interaction_default_node$group == "non-RA"]
+)$p # K-S test
+p_path <- scientific(p_path, digits = 3)
+
+pdf(file = "/ix/hpark/Jie/MB/Fig4C.pdf")
+ggplot(interaction_default_node, aes(x = AverageShortestPathLength, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_path)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+dev.off()
+```
+
+
+```{r}
+# BetweennessCentrality
+p_bc <- ks.test(x = interaction_default_node$BetweennessCentrality[interaction_default_node$group == "RA"],
+              y = interaction_default_node$BetweennessCentrality[interaction_default_node$group == "non-RA"]
+)$p # K-S test
+p_bc <- scientific(p_bc, digits = 3)
+
+ggplot(interaction_default_node, aes(x = BetweennessCentrality, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_bc)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+```
+
+
+```{r}
+# ClosenessCentrality
+p_cc <- ks.test(x = interaction_default_node$ClosenessCentrality[interaction_default_node$group == "RA"],
+              y = interaction_default_node$ClosenessCentrality[interaction_default_node$group == "non-RA"]
+)$p # K-S test
+p_cc <- scientific(p_cc, digits = 3)
+
+ggplot(interaction_default_node, aes(x = ClosenessCentrality, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_cc)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+```
+
+
+```{r}
+# ClusteringCoefficient
+# The clustering coefficient is a basic measure for local density (connections) in a network. The number gives a 'probability' that two friends of a node are connected too (if A is connected to B and to C, how probable is the connections between B and C) . An alternative view: it counts the number of triangles around a node, divided by the possible number of triangles around a node. All these numbers are local (node-related). To obtain the overall clustering coefficient of a network one takes the mean value of all node-related clustering coefficients.
+p_cluster <- ks.test(x = interaction_default_node$ClusteringCoefficient[interaction_default_node$group == "RA"],
+              y = interaction_default_node$ClusteringCoefficient[interaction_default_node$group == "non-RA"]
+)$p # K-S test
+p_cluster <- scientific(p_cluster, digits = 3)
+
+ggplot(interaction_default_node, aes(x = ClusteringCoefficient, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_cluster)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+```
+
+```{r}
+# save the 3 figures above
+pdf(file = "/ix/hpark/Jie/MB/Fig4D.pdf")
+ggplot(interaction_default_node, aes(x = BetweennessCentrality, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_bc)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+
+ggplot(interaction_default_node, aes(x = ClosenessCentrality, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_cc)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+
+ggplot(interaction_default_node, aes(x = ClusteringCoefficient, fill = group)) +
+  geom_histogram(aes(y = ..count.. / sum(..count..)), alpha = 0.3, position = "identity", bins = 20) +
+  scale_fill_manual(values = c("RA" = "blue", "non-RA" = "red")) +
+  ggtitle(paste0("K-S test, p =", p_cluster)) +
+  ylab("Relative Abundance") +
+  theme_minimal()
+
+dev.off()
+```
+
+# check
+```{r}
+vector1 <- interaction_default_node$taxa[interaction_default_node$group == "test"]
+diff <- setdiff(test$taxa, vector1)
+diff
+Rx <- colnames(R_x)
+NRx <- colnames(NR_x)
+```
+
+
+
+# Response-related bacteria from Hassane's paper
+```{r}
+R <- c("LKT__p__bacteroidetes","LKT__s__pseudomonas_brassicacea","LKT__s__butyricimonas_virosa","LKT__s__bactroidales_bacterium","LKT__s__odoribacter_laneus","LKT__s__bacteroides_intestinalis","LKT__s__alistipes_finegoldii","LKT__s__desulfovibrio_legallii","LKT__g__porphyromonas","LKT__s__bacteroides_cellulosilyticus","LKT__p__ascomycota","LKT__s__prevotella_ruminicola","LKT__s__prevotella_baroniae","LKT__s__prevotella_stercorea","LKT__s__desulfovibrio_fairfieldensis","LKT__s__prevotella_unclassified","LKT__s__prevotella_lascolaii","LKT__s__prevotellamassilia_timonen")
+NR <- c("LKT__s__bifidobacterium_breve","LKT__s__bifidobacterium_longum","LKT__s__veillonella_unclassified","LKT__f__actinomycetaceae","LKT__s__xylanimonas_cellulosilytica","LKT__g__haemophilus","LKT__s__fusobacterium_varium","LKT__g__coprobacillus","LKT__s__eubacterium_rectale","LKT__s__butyrivibrio_crossotus","LKT__s__clostridium_spiroforme","LKT__s__roseburia_unclassified","LKT__s__sanguibacter_keddieii","LKT__s__gordonibacter_pamelaeae","LKT__s__actinomyces_bouchesdurh","LKT__s__eubacterium_oxidoreducen","LKT__s__eisenbergiella_massiliensis","LKT__g__roseburia","LKT__s__kosakonia_oryziphila","LKT__s__ruminococcus_gnavus","LKT__g__eggerthella","LKT__s__bacteroides_pectinophilus","LKT__s__dorea_formicigenerans","LKT__s__lachnobacterium_bovis","LKT__s__eubacterium_ramulus","LKT__s__blautia_wexlerae","LKT__s__absiella_dolichum","LKT__g__butyrivibrio","LKT__s__lachnospira_multipara","LKT__s__anaerocolumna_xylanovor","LKT__s__bacillus_thuringiensis","LKT__g__blautia")
+# name
+interaction_default_node$response_H <- ifelse(interaction_default_node$taxa %in% R, "R",
+                                              ifelse(interaction_default_node$taxa %in% NR, "NR","other"))
+
+# View the updated dataframe
+table(interaction_default_node$response_H)
+```
+
+# bacteria returned by MCODE
+```{r}
+mcode <- "LKT S Clostridium phoceensis", 
+"LKT s Bacteroides finegoldii"
+"LKT f Rikenellaceae"
+"LKT s Intestinimonas butyriciproducens"
+"LKT s Dysosmobacter welbionis"
+"LKT s Bacteroides xylanisolvens"
+"LKT s Parabacteroides distasonis"
+"LKT s Clostridium symbiosum"
+"LKT s Ruminococcus torques"
+"LKT s Bacteroides vulgatus"
+"LKT s Clostridium lepturn"
+"LKT s Anaerobutyricum hallii"
+"LKT s Intestinimonas timonensis"
+"LKT s Coprococcus eutactus"
+"LKT s Enterocloster bolteae"
+"LKT s Ruminococcus gnavus"
+"LKT s Ruminococcus Unclassified"
+"LKT s Dorea formicigene" ......
+"LKT s Enterocloster aldensis"
+"LKT s Eubacterium rectale"
+"LKT g Blautia"
+"LKT s Flavonifractor plautil"
+"LKT f Ruminococcaceae"
+"LKT s Enterocloster lavalensis"
+"LKT s Blautia massiliensis"
+"LKT s Blautia hansenii"
+"LKT s Roseburia hominis"
+"LKT s Blautia wexlerae"
+"LKT s Roseburia inulinivorans"
+"LKT s Frisingicoccus caecimuris"
+```
+
