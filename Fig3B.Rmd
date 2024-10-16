@@ -1,0 +1,302 @@
+---
+title: "heatmap"
+output: html_document
+date: "2024-10-11"
+---
+
+```{r}
+# test the code in tutorial
+library(ComplexHeatmap)
+expr <- readRDS(paste0(system.file(package = "ComplexHeatmap"),
+                      "/extdata/gene_expression.rds"))
+mat <- as.matrix(expr[, grep("cell", colnames(expr))])
+type <- gsub("s\\d+_", "", colnames(mat))
+ha = HeatmapAnnotation(
+  df = data.frame(type = type),
+   annotation_height = unit(4, "mm")
+  )
+
+Heatmap(mat, name = "expression", km = 5, top_annotation = ha,
+    show_row_names = FALSE, show_column_names = FALSE) +
+Heatmap(expr$length, name = "length", width = unit(5, "mm"),
+    col = circlize::colorRamp2(c(0, 100000), c("white", "orange"))) +
+Heatmap(expr$type, name = "type", width = unit(5, "mm")) +
+Heatmap(expr$chr, name = "chr", width = unit(5, "mm"),
+    col = circlize::rand_color(length(unique(expr$chr))))
+```
+# get our microbiome data matrix
+```{r, message=FALSE}
+library(devtools)
+library(Biobase)
+library(sva)
+library(bladderbatch)
+library(snpStats)
+library(tidyverse)
+```
+
+# Read in our data
+```{r, message=FALSE}
+library("readxl")
+meta <- read_excel("/ix/hpark/Jie/MB/Figure_update/Intestinal_data_MOESM3_ESM.xlsx", sheet = "Metadata")
+lkt <- read_excel("/ix/hpark/Jie/MB/Figure_update/Intestinal_data_MOESM3_ESM.xlsx", sheet = "LKT_PPM")
+# make first column to row name for lkt
+library(tidyverse)
+lkt <- lkt %>% remove_rownames %>% column_to_rownames(var="row.names")
+meta2 <- meta[order(match(meta$Sample,colnames(lkt))),] # order metadata as the order of lkt data
+meta2$batch <- NA
+```
+
+# log2 and quantile transformation
+```{r}
+data_log <- log2(lkt+1)           # Log transformation
+library(preprocessCore)
+m <- data.matrix(data_log,rownames.force=nrow(data_log))
+data_lm <- normalize.quantiles(m)
+data_lm <- as.data.frame(data_lm)
+colnames(data_lm) <- colnames(data_log)
+rownames(data_lm) <- rownames(data_log)
+```
+
+# batch correction
+```{r, message=FALSE}
+for (i in 1:186) {
+  if (meta2$Study[i] == "Pittsburgh"){
+    meta2$batch[i] <- 1
+  } else if (meta2$Study[i] == "Chicago") {
+    meta2$batch[i] <- 2
+  } else if (meta2$Study[i] == "Houston") {
+    meta2$batch[i] <- 3
+  } else if (meta2$Study[i] == "Dallas") {
+    meta2$batch[i] <- 4
+  } else if (meta2$Study[i] == "New_York") {
+    meta2$batch[i] <- 5
+  }
+} 
+combat_lkt <- ComBat(dat=data_lm, batch=meta2$batch, mod=NULL, par.prior=TRUE, prior.plots=FALSE)
+```
+
+# get meta data
+```{r}
+pheno <- subset(meta2, select = c("Sample", "Study_Clin_Response", "Study")) # select interested metadata
+# transpose count data
+t_lkt <- t(combat_lkt)
+# as numeric
+t_lkt <- as.data.frame(t_lkt)
+t_lkt[] <- lapply(t_lkt, function(x) {
+      as.numeric(as.character(x)) 
+})
+# merge with metadata
+all <- cbind(t_lkt, pheno)
+table(all$Sample == row.names(all)) # check merge is correctly done
+```
+
+# get list of RA, control and other bacteria
+```{r}
+test <- read_csv("test.csv")
+control <- read_csv("control.csv")
+
+# Initialize the dataframe C with one column and same number of rows as ncol(A)
+type_MB <- data.frame(bac_group = character(ncol(t_lkt)), stringsAsFactors = FALSE)
+# Loop through the row names of A to populate C based on conditions
+type_MB$bac_group <- sapply(names(t_lkt), function(row) {
+  if (row %in% test$taxa) {
+    return("test")
+  } else if (row %in% control$taxa) {
+    return("control")
+  } else {
+    return("other")
+  }
+})
+
+# check
+table(type_MB$bac_group)
+```
+
+
+# make the data format as in example code
+```{r}
+pdf(file = "/ix/hpark/Jie/MB/Figure_update/Fig3B_heatmap.pdf")
+set.seed(1130)
+mat_MB <- as.matrix(t_lkt)
+#type_MB <-  make the type as RA, other, control
+ha_MB = HeatmapAnnotation(
+  df = data.frame(type_MB),
+   annotation_height = unit(4, "mm")
+  )
+Heatmap(mat_MB, name = "Abundance", km = 1, top_annotation = ha_MB,
+    show_row_names = FALSE, show_column_names = FALSE) +
+Heatmap(all$Study_Clin_Response, name = "Response", width = unit(5, "mm"), col = c("orange", "purple")) +
+Heatmap(all$Study, name = "Cohort", width = unit(5, "mm"), col = c("#00CED1", "#FFD700", "#FF69B4", "#8B4513", "#696969")) 
+dev.off()
+```
+
+```{r}
+type_MB <- data.frame(group = character(ncol(t_lkt)), stringsAsFactors = FALSE)
+type_MB$taxa <- names(t_lkt)
+# Loop through the row names of A to populate C based on conditions
+type_MB$group <- sapply(names(t_lkt), function(row) {
+  if (row %in% test$taxa) {
+    return("RA")
+  } else if (row %in% control$taxa) {
+    return("control")
+  } else {
+    return("other")
+  }
+})
+# Convert group to a factor with specified order
+type_MB$group <- factor(type_MB$group, levels = c("RA", "other", "control"))
+
+# Reorder based on group first, but keeping taxa within each group intact
+# We sort by 'group' first and within each group by 'taxa'
+order_index <- order(type_MB$group, type_MB$taxa)
+
+# Reorder matrix columns and annotation data based on this order
+mat_MB_ordered <- mat_MB[, order_index]
+type_MB_ordered <- type_MB[order_index, ]
+
+# Now we create the HeatmapAnnotation with the reordered group and taxa
+ha_MB <- HeatmapAnnotation(
+  df = data.frame(group = type_MB_ordered$group),
+  annotation_height = unit(4, "mm")
+)
+
+# Create the heatmap with reordered columns
+Heatmap(mat_MB_ordered, name = "Abundance", km = 1, top_annotation = ha_MB,
+    show_row_names = FALSE, show_column_names = FALSE) +
+Heatmap(all$Study_Clin_Response, name = "Response", width = unit(5, "mm"), col = c("orange", "purple")) +
+Heatmap(all$Study, name = "Cohort", width = unit(5, "mm"), col = c("#00CED1", "#FFD700", "#FF69B4", "#8B4513", "#696969"))
+
+```
+# now let's try make the rows clustered as group, then column cluster by algorithm
+# The annotation for columns are not shown - no idea why
+```{r, message=FALSE}
+#pdf(file = "/ix/hpark/Jie/MB/Figure_update/Fig3B_heatmap_alt.pdf")
+library(pheatmap) ## for heatmap generation
+rownames(type_MB) <- colnames(mat_MB)
+pheatmap(mat_MB,scale="row", annotation_col = type_MB,
+         annotation_colors = list(bac_group = c(test="orange", control="black", other="blue")),
+         color=colorRampPalette(c("navy", "white", "red"))(50),
+         show_rownames = FALSE, show_colnames = FALSE,
+         cutree_cols=3, cutree_rows=1, annotation_legend = TRUE)
+
+
+# Try to figure out why there is no color bar of annotation
+# Example column annotation data frame (replace with your actual data)
+row_annotation <- data.frame(row_group = rep(c("Group1", "Group2", "Group3"), length.out = nrow(mat_MB)))
+rownames(row_annotation) <- rownames(mat_MB)
+column_annotation1 <- data.frame(col_group1 = rep(c("A", "B", "C"), length.out = ncol(mat_MB)))
+column_annotation2 <- data.frame(col_group2 = rep(c("X", "Y"), length.out = ncol(mat_MB)))
+
+# Combine column annotations into one data frame
+column_annotation <- cbind(column_annotation1, column_annotation2)
+
+# Define annotation colors
+row_annotation_colors <- list(row_group = c(Group1 = "red", Group2 = "green", Group3 = "blue"))
+column_annotation_colors <- list(col_group1 = c(A = "orange", B = "cyan", C = "purple"),
+                                  col_group2 = c(X = "yellow", Y = "pink"))
+pheatmap(mat_MB, 
+         scale = "row", 
+         annotation_row = row_annotation,  # Add row annotation
+         annotation_col = column_annotation,  # Add combined column annotations
+         annotation_colors = c(row_annotation_colors, column_annotation_colors),  # Combine annotation colors
+         color = colorRampPalette(c("navy", "white", "red"))(50), 
+         show_rownames = FALSE, 
+         show_colnames = FALSE,
+         cutree_rows = 3,  # Adjust to desired number of row clusters
+         cutree_cols = 2,   # Adjust to desired number of column clusters
+         annotation_names_row = TRUE,
+         annotation_names_col = TRUE,
+         annotation_row_height = unit(2, "cm"),  # Adjust row annotation size
+         annotation_col_width = unit(2, "cm"),   # Adjust column annotation size
+)
+
+#dev.off()
+```
+# histograms for the 5 cohorts
+```{r}
+# Load required libraries
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+# Example normalized data matrix
+set.seed(42)
+# Rows are samples, columns are bacteria
+normalized_data <- matrix(rnorm(1000, mean=0, sd=1), nrow=100, ncol=10)  # 100 samples, 10 bacteria
+colnames(normalized_data) <- paste0("Bacteria", 1:10)  # Bacteria names
+
+# Example metadata (with cohort, test/control groups)
+metadata <- data.frame(
+  Sample = paste0("Sample", 1:100),            # Sample names
+  Cohort = sample(paste0("Cohort", 1:5), 100, replace = TRUE),  # 5 cohorts
+  Group = sample(c("Test", "Control"), 100, replace = TRUE)     # Test or Control groups
+)
+
+# Example metadata for bacteria
+bac_meta <- data.frame(bac_group = character(ncol(t_lkt)), stringsAsFactors = FALSE)
+# Loop through the row names of A to populate C based on conditions
+bac_meta$bac_group <- sapply(names(t_lkt), function(row) {
+  if (row %in% test$taxa) {
+    return("RA bacteria")
+  } else if (row %in% control$taxa) {
+    return("Control")
+  } else {
+    return("Other")
+  }
+})
+bac_meta$Bacteria <- names(t_lkt)
+
+# Reshape the normalized data into long format
+data_long <- melt(as.matrix(t_lkt))
+colnames(data_long) <- c("Sample", "Bacteria", "Abundance")
+
+# Merge with metadata to include cohort and group information
+data_long <- merge(data_long, pheno, by.x = "Sample", by.y = "Sample")
+
+# Merge with bacteria metadata (Test/Control group for each bacterium)
+data_long <- merge(data_long, bac_meta, by.x = "Bacteria", by.y = "Bacteria")
+
+# Plot histograms for each cohort, with test/control bacteria
+pdf(file = "/ix/hpark/Jie/MB/Figure_update/Fig3B_hist_after_BATCH_CORRECTION.pdf")
+ggplot(data_long, aes(x = Abundance, fill = bac_group)) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 30) +  # Transparent overlapping histograms
+  facet_wrap(~ Study, ncol = 2) +  # One histogram for each cohort
+  labs(title = "Bacterial Abundance Distribution Across Cohorts AFTER BATCH CORRECTION",
+       x = "Abundance", y = "Frequency") +
+  scale_fill_manual(values = c("RA bacteria" = "blue", "Control" = "red", "Other" = "grey")) +  # Colors for test/control
+  theme_minimal()
+dev.off()
+
+# Create a new data frame to hold the histogram data
+# Using cut to create histogram bins
+data_long$Abundance_Bin <- cut(data_long$Abundance, breaks = seq(-5, 20, by = 1), include.lowest = TRUE)
+
+# Count frequencies for each bin in each cohort
+hist_data <- data_long %>%
+  group_by(Study, Abundance_Bin, bac_group) %>%
+  summarise(Frequency = n(), .groups = 'drop')  # Count occurrences in each bin
+
+# Calculate the total frequency for each cohort
+total_frequency <- hist_data %>%
+  group_by(Study) %>%
+  summarise(Total = sum(Frequency), .groups = 'drop')
+
+# Merge total frequencies back to hist_data
+hist_data <- hist_data %>%
+  left_join(total_frequency, by = "Study") %>%
+  mutate(Normalized_Frequency = Frequency / Total)  # Normalize frequencies
+
+# Plot normalized histograms for each cohort
+pdf(file = "/ix/hpark/Jie/MB/Figure_update/Fig3B_hist_normalized.pdf")
+ggplot(hist_data, aes(x = Abundance_Bin, y = Normalized_Frequency, fill = bac_group)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.5) +  # Bar plots for normalized frequencies
+  facet_wrap(~ Study, ncol = 2, nrow = 3) +  # Layout in 2 rows and 3 columns (2x3 grid)
+  labs(title = "Normalized Frequency of Bacterial Abundance Distribution Across Cohorts",
+       x = "Abundance Bin", y = "Normalized Frequency") +
+  scale_fill_manual(values = c("RA bacteria" = "blue", "Control" = "red", "Other" = "grey")) +  # Colors for test/control
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),  # Remove x-axis text (numbers)
+        axis.ticks.x = element_blank())  # Remove x-axis ticks
+dev.off()
+```
+
