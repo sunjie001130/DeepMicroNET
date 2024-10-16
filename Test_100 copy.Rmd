@@ -1,0 +1,379 @@
+---
+title: '100'
+author: "Jie Sun"
+date: "10/19/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library("readxl")
+```
+
+# read in data
+```{r}
+library(tidyr)
+P <- read.table("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/res_pit_100.txt", header = FALSE, sep = ",", dec = ".")
+b <- t(P)
+b <- as.data.frame(b)
+P <- separate(data = b, col = V1, into = c("taxa", "duplicate"), sep = ":")
+P$duplicate <- as.numeric(P$duplicate)
+hist(P$duplicate, xlim=c(25, 80), main="Pitt cohort", xlab = "Confidence", ylab = "Number of bacteria")
+mean(P$duplicate)
+sd(P$duplicate)
+
+nP <- read.table("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/res_nonP_100.txt", header = FALSE, sep = ",", dec = ".")
+b <- t(nP)
+b <- as.data.frame(b)
+nP <- separate(data = b, col = V1, into = c("taxa", "duplicate"), sep = ":")
+nP$duplicate <- as.numeric(nP$duplicate)
+hist(nP$duplicate, xlim=c(25, 80), main="non-Pitt cohort", xlab = "Confidence", ylab = "Number of bacteria")
+mean(nP$duplicate)
+sd(nP$duplicate)
+#########################################################
+
+P$duplicate <- as.numeric(P$duplicate)
+hist(P$duplicate, xlim=c(25, 80), main="Pitt cohort", xlab = "Confidence", ylab = "Number of bacteria")
+nP$duplicate <- as.numeric(nP$duplicate)
+hist(nP$duplicate, xlim=c(25, 80), main="non-Pitt cohort", xlab = "Confidence", ylab = "Number of bacteria")
+
+# put two hist together
+P$cohort <- "Pitt"
+nP$cohort <- "Non-Pitt"
+
+# Combine into one data frame
+library(dplyr)
+library(ggplot2)
+combined_data <- bind_rows(P, nP)
+
+# Plot overlapping histograms
+pdf(file = "/Users/sunjie/Desktop/SFig2.pdf")
+ggplot(combined_data, aes(x = duplicate, fill = cohort)) +
+  geom_histogram(alpha = 0.6, position = "identity", binwidth = 5, color = "black") +  # Adjust transparency and binwidth
+  scale_fill_manual(values = c("Pitt" = "red", "Non-Pitt" = "grey")) +  # Set colors
+  xlim(25, 80) +  # Set x-axis limits
+  labs(title = "Confidence of Bacteria in Pitt vs Non-Pitt Cohorts", 
+       x = "Confidence", 
+       y = "Number of bacteria") +
+  theme_classic()  # Clean theme
+dev.off()
+
+# scatter plotP$taxa == nP$taxa
+names(nP) <- c("taxa", "Dup_np")
+names(P) <- c("taxa", "Dup_p")
+all <- merge(P, nP, by = "taxa")
+
+
+plot(all$Dup_p, all$Dup_np, col = "blue", main="Number of selected times of taxa from Pitt vs non-Pitt cohort", xlab="Pitt", ylab="non-Pitt")
+abline(lm(all$Dup_p ~ all$Dup_np))
+summary(lm(all$Dup_p ~ all$Dup_np))
+
+pdf(file = "/Users/sunjie/Desktop/Fig3A.pdf")
+ggplot(all, aes(x = Dup_p, y = Dup_np)) +
+  geom_point() +   # Scatter plot
+  geom_smooth(method = "lm", color = "blue", se = FALSE, size = 0.7) +
+  labs(title = "Confidence of bacteria selections", 
+       x = "Pitt", 
+       y = "Non-Pitt") +
+  theme_classic() +
+  # Add top right red rectangle (x > 57, y > 57)
+  annotate("rect", xmin = 57.3, xmax = Inf, ymin = 57.3, ymax = Inf, 
+           fill = "red", alpha = 0.7) +
+  # Add bottom left grey rectangle (x < 50, y < 50)
+  annotate("rect", xmin = -Inf, xmax = 49.7, ymin = -Inf, ymax = 49.7, 
+           fill = "grey", alpha = 0.7) +
+  # Add text "RA bacteria" at the top right
+  annotate("text", x = 75, y = 75, label = "RA bacteria", color = "black", size = 5, hjust = 1) +
+  # Add text "Control" at the bottom left
+  annotate("text", x = 40, y = 30, label = "Control", color = "black", size = 5, hjust = 0) 
+dev.off()
+
+# Get R square and p value
+model <- lm(Dup_np ~ Dup_p, data = all)
+
+# Get the summary of the model to access p-value and R-squared
+model_summary <- summary(model)
+
+# Extract R-squared and p-value
+r_squared <- model_summary$r.squared
+p_value <- coef(model_summary)[2, 4]  # p-value for the slope
+
+# Print the results
+cat("R-squared:", r_squared, "\n")
+cat("P-value:", p_value, "\n")
+```
+# Get the set of test and control group
+```{r}
+# use cutoff = 50 for control group
+test <- all[all$Dup_p > 57  & all$Dup_np > 57, ]
+test_new <- as.data.frame(
+  apply(test,2, function(x) gsub("\\s+", "", x)))
+control <- all[all$Dup_p < 50  & all$Dup_np < 50, ]
+control_new <- as.data.frame(
+  apply(control,2, function(x) gsub("\\s+", "", x)))
+# save test and control bacteria
+write.csv(test_new, "/Users/sunjie/Desktop/MB/test.csv")
+write.csv(control_new, "/Users/sunjie/Desktop/MB/control.csv")
+
+# read in LKT_feature_table
+feature <- read_excel("/Users/sunjie/Desktop/MB/Stage3_PUBdata/Intestinal_data_MOESM3_ESM.xlsx", sheet = "LKT_featuretable")
+# select test and control from feature table
+test_f <- feature[feature$row.names %in% test_new$taxa, ]
+control_f <- feature[feature$row.names %in% control_new$taxa, ]
+sig7 <- c("LKT__s__Prevotella_copri","LKT__s__Prevotella_Unclassified","LKT__g__Blautia","LKT__s__Prevotella_lascolaii","LKT__s__Adlercreutzia_equolifaciens","LKT__g__Prevotella","LKT__s__Desulfovibrio_Unclassified")
+sig7_f <- feature[feature$row.names %in% sig7, ]
+# see family
+table(test_f$Family)
+table(test_f$Phylum)
+table(control_f$Family)
+table(control_f$Phylum)
+table(sig7_f$Family)
+# get species from test_f
+input_test <-  unique(test_f$Species)
+a <- gsub("s__", "", input_test)
+b <- gsub("Unclassified_", "", a)
+c <- gsub("_", " ", b)
+write.table(c, file = "/Users/sunjie/Desktop/test.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+
+input_test <-  unique(control_f$Species)
+a <- gsub("s__", "", input_test)
+b <- gsub("Unclassified_", "", a)
+c <- gsub("_", " ", b)
+write.table(c, file = "/Users/sunjie/Desktop/control.txt", sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+# alpha and beta diversity of test and control group
+## using data from REanalysis.Rmd
+# Read in our data
+```{r, message=FALSE}
+library("readxl")
+meta <- read_excel("/Users/sunjie/Desktop/MB/Stage3_PUBdata/Intestinal_data_MOESM3_ESM.xlsx", sheet = "Metadata")
+lkt <- read_excel("/Users/sunjie/Desktop/MB/Stage3_PUBdata/Intestinal_data_MOESM3_ESM.xlsx", sheet = "LKT_PPM")
+# make first column to row name for lkt
+library(tidyverse)
+lkt <- lkt %>% remove_rownames %>% column_to_rownames(var="row.names")
+meta2 <- meta[order(match(meta$Sample,colnames(lkt))),] # order metadata as the order of lkt data
+meta2$batch <- NA
+
+# log2 and quantile transformation
+data_log <- log2(lkt+1)           # Log transformation
+library(preprocessCore)
+m <- data.matrix(data_log,rownames.force=nrow(data_log))
+data_lm <- normalize.quantiles(m)
+data_lm <- as.data.frame(data_lm)
+colnames(data_lm) <- colnames(data_log)
+rownames(data_lm) <- rownames(data_log)
+# batch correction
+library(Biobase)
+library(sva)
+library(bladderbatch)
+library(snpStats)
+library(tidyverse)
+for (i in 1:186) {
+  if (meta2$Study[i] == "Pittsburgh"){
+    meta2$batch[i] <- 1
+  } else if (meta2$Study[i] == "Chicago") {
+    meta2$batch[i] <- 2
+  } else if (meta2$Study[i] == "Houston") {
+    meta2$batch[i] <- 3
+  } else if (meta2$Study[i] == "Dallas") {
+    meta2$batch[i] <- 4
+  } else if (meta2$Study[i] == "New_York") {
+    meta2$batch[i] <- 5
+  }
+} 
+combat_lkt <- ComBat(dat=data_lm, batch=meta2$batch, mod=NULL, par.prior=TRUE, prior.plots=FALSE)
+```
+
+# alpha and beta diversity
+```{r}
+library(ggplot2)
+library(vegan)
+# diversity cannot take negative values
+# Error in h(simpleError(msg, call)) :
+#error in evaluating the argument 'x' in selecting a method for function 'as.data.frame': input data must be non-negative
+any(combat_lkt < 0) # TRUE
+any(data_lm < 0) #FALSE
+# So to calculate alpha diversity, we use data_lm, which is the data that was not batch_corrected
+taxa <- t(data_lm)
+test_d <- taxa[, (colnames(taxa) %in% test_new$taxa)]
+control_d <- taxa[, (colnames(taxa) %in% control_new$taxa)]
+# alpha
+test_a <- as.data.frame(diversity(test_d,MARGIN = 2,index = "shannon"))
+names(test_a) <- "alpha"
+test_a$group <- "test"
+control_a <- as.data.frame(diversity(control_d,MARGIN = 2,index = "shannon"))
+names(control_a) <- "alpha"
+control_a$group <- "control"
+
+diversity <- rbind(test_a, control_a)
+#################################################
+#pdf(file = "/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/Fig3b.pdf")
+ggplot(diversity, aes(x = group, y = alpha)) + 
+  geom_boxplot() +
+  ggtitle("Unpaired t-test of alpha diversity: p<0.0001") +
+  xlab("Group: Control(n=54); RA bacteria(n=58)")
+
+t.test(test_a$alpha, control_a$alpha, var.equal = TRUE) # t-test
+#dev.off()
+################################################
+# beta
+beta_dist <- vegdist(control_d,index = "bray")
+mds <- metaMDS(beta_dist)
+mds_data <- as.data.frame(mds$points)
+mds_data$SampleID <- rownames(mds_data)
+mds_data <- dplyr::left_join(mds_data, pheno, by = c("SampleID" = "Sample"))
+ggplot(mds_data, aes(x = MDS1, y = MDS2, color = Study_Clin_Response)) +
+  geom_point()
+```
+
+# For alpha diversity, first RA vs control in all patients, then compare 
+R vs NR in RA group, 
+female vs male in RA group, 
+R_female vs NR_female in RA group, 
+R_male vs NR_male in RA group; 
+R vs NR in control group, 
+female vs male in control group, 
+R_female vs NR_female in control group, 
+R_male vs NR_male in control group; 
+RA vs control in R, 
+RA vs control in NR, 
+RA vs control in male, 
+RA vs control in female;
+RA vs control in R_male, 
+RA vs control in NR_male,
+RA vs control in R_female, 
+RA vs control in NR_female.
+```{r}
+# all patients together, regardless if they are R or NR, male or female, just compare the alpha diversity of RA bacteria with control
+test_a <- as.data.frame(diversity(t(test_d), MARGIN = 2,index = "shannon"))
+names(test_a) <- "alpha"
+test_a$group <- "RA bacteria"
+control_a <- as.data.frame(diversity(t(control_d), MARGIN = 2,index = "shannon"))
+names(control_a) <- "alpha"
+control_a$group <- "Control"
+diversity <- rbind(test_a, control_a)
+
+ggplot(diversity, aes(x = group, y = alpha)) + 
+  geom_boxplot() +
+  ggtitle("Unpaired t-test of alpha diversity: p<0.0001") +
+  xlab("Group: Control(n=54); RA bacteria(n=58)") +
+  theme_classic()
+t.test(test_a$alpha, control_a$alpha, var.equal = TRUE) # t-test
+
+### compare RA vs control in Rs only
+# extract only Rs from test_d and control_d
+
+
+### make a couple comparisons in RA bacteria group only
+# R vs NR
+
+```
+
+
+
+# Scatter plot colored by delta DG score
+```{r}
+#install.packages("viridis")
+library(viridis)
+# read in  DG score data
+nP_score <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/nonP_score.csv")
+names(nP_score) <- c("number", "taxa", "delta_DG_nP")
+P_score <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/pit_score.csv")
+names(P_score) <- c("number", "taxa", "delta_DG_Pit")
+
+all$taxa <- sub(" ", "", all$taxa)
+all_DG_nP <- merge(all, nP_score, by = "taxa")
+all_DG_nP %>%
+  ggplot(aes(Dup_p, Dup_np)) +
+  geom_point(alpha=0.5, size=2, aes(color=delta_DG_nP)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "red1") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+
+all_DG_P <- merge(all, P_score, by = "taxa")
+all_DG_P %>%
+  ggplot(aes(Dup_p, Dup_np)) +
+  geom_point(alpha=0.5, size=2, aes(color=delta_DG_Pit)) +
+  scale_color_gradient(low = "white", high = "blue") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+#plot(all_w$c_P, all_w$c_nP, col = "blue", main = "Number of selected times of taxa from Pitt vs non-Pitt cohort", xlab ="Pitt", ylab = "Non-Pitt")
+#abline(lm(all_w$c_nP ~ all_w$c_P))
+#summary(lm(all_w$c_nP ~ all_w$c_P))
+```
+# Scatter plot colored by raw DG score
+```{r}
+nP_score_abs <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/nonP_score_abs.csv")
+names(nP_score_abs) <- c("number", "taxa", "s1_nP", "s2_nP")
+all_s1_nP <- merge(all, nP_score_abs, by = "taxa")
+all_s1_nP %>%
+  ggplot(aes(Dup_p, Dup_np)) +
+  geom_point(alpha=0.5, size=2, aes(color=s1_nP)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "red1") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+
+P_score_abs <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/pit_score_abs.csv")
+names(P_score_abs) <- c("number", "taxa", "s1_Pit", "s2_Pit")
+all_s1_Pit <- merge(all, P_score_abs, by = "taxa")
+all_s1_Pit %>%
+  ggplot(aes(Dup_p, Dup_np)) +
+  geom_point(alpha=0.5, size=2, aes(color=s1_Pit)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "blue") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+```
+# Scatter plot colored by w score
+```{r}
+library(dplyr)
+# For non-Pitt cohort
+nP_w <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/DNN_selected_associations_nP_100.csv")
+nP_w_mean <- aggregate(W ~ Feature1, data=nP_w, FUN=function(x) c(mean=mean(x)))
+nP_w_count <- aggregate(W ~ Feature1, data=nP_w, FUN=function(x) count=length(x))
+names(nP_w_mean) <- c("taxa", "w_nP")
+names(nP_w_count) <- c("taxa", "c_nP")
+all_w_nP <- merge(all, nP_w_mean, by = "taxa")
+all_w_nP <- merge(all_w_nP, nP_w_count, by = "taxa")
+
+# For Pitt cohort
+Pit_w <- read.csv("/Users/sunjie/Desktop/MB/Stage3_PUBdata/100tests/DNN_selected_associations_Pit_100.csv")
+Pit_w_mean <- aggregate(W ~ Feature1, data=Pit_w, FUN=function(x) mean=mean(x))
+Pit_w_count <- aggregate(W ~ Feature1, data=Pit_w, FUN=function(x) count=length(x))
+names(Pit_w_mean) <- c("taxa", "w_P")
+names(Pit_w_count) <- c("taxa", "c_P")
+all_w_P <- merge(all, Pit_w_mean, by = "taxa")
+all_w_P <- merge(all_w_P, Pit_w_count, by = "taxa")
+
+all_w <- merge(all_w_P, all_w_nP, by = "taxa")
+
+all_w %>%
+  ggplot(aes(c_P, c_nP)) +
+  geom_point(alpha=0.5, size=2, aes(color=w_P)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "blue") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+all_w %>%
+  ggplot(aes(c_P, c_nP)) +
+  geom_point(alpha=0.5, size=2, aes(color=w_nP)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "red") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+```
+```{r}
+all_DGw_nP <- merge(all_w, nP_score, by = "taxa")
+all_DGw_nP %>%
+  ggplot(aes(c_P, c_nP)) +
+  geom_point(alpha=0.5, size=2, aes(color=delta_DG_nP)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "red1") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+
+all_DGw_P <- merge(all_w, P_score, by = "taxa")
+all_DGw_P %>%
+  ggplot(aes(c_P, c_nP)) +
+  geom_point(alpha=0.5, size=2, aes(color=delta_DG_Pit)) +
+  #scale_color_viridis(option="rocket") +
+  scale_color_gradient(low = "white", high = "blue") +
+  labs(x="% selected in Pitt", y="% selected in non_Pitt", subtitle="Number of selected times of taxa from Pitt vs non-Pitt cohort")
+
+```
+
